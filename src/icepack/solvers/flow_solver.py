@@ -231,18 +231,7 @@ class PETScSolver:
 
     def setup(self, **kwargs):
         for name, field in kwargs.items():
-            if name in self._fields.keys():
-                self._fields[name].assign(field)
-            else:
-                if isinstance(field, firedrake.Constant):
-                    self._fields[name] = firedrake.Constant(field)
-                elif isinstance(field, firedrake.Function):
-                    self._fields[name] = field.copy(deepcopy=True)
-                else:
-                    raise TypeError(
-                        "Input %s field has type %s, must be Constant or Function!"
-                        % (name, type(field))
-                    )
+            self._fields[name] = field
 
         # Create homogeneous BCs for the Dirichlet part of the boundary
         u = self._fields["velocity"]
@@ -260,6 +249,7 @@ class PETScSolver:
         _kwargs = {"side_wall_ids": self._side_wall_ids, "ice_front_ids": ice_front_ids}
         action = self._model.action(**self._fields, **_kwargs)
         F = firedrake.derivative(action, u)
+        self.F = F
 
         quad_degree = self._model.quadrature_degree(**self._fields)
         problem = firedrake.NonlinearVariationalProblem(
@@ -362,23 +352,12 @@ class LaxWendroff:
         r"""Create the internal data structures that help reuse information
         from past prognostic solves"""
         for name, field in kwargs.items():
-            if name in self._fields.keys():
-                self._fields[name].assign(field)
-            else:
-                if isinstance(field, firedrake.Constant):
-                    self._fields[name] = firedrake.Constant(field)
-                elif isinstance(field, firedrake.Function):
-                    self._fields[name] = field.copy(deepcopy=True)
-                else:
-                    raise TypeError(
-                        "Input %s field has type %s, must be Constant or Function!"
-                        % (name, type(field))
-                    )
+            self._fields[name] = field
 
-        dt = firedrake.Constant(1.0)
+        dt = self._fields["timestep"]
         h = self._fields["thickness"]
         u = self._fields["velocity"]
-        h_0 = h.copy(deepcopy=True)
+        h_ = self._fields["thickness_old"]
 
         Q = h.function_space()
         mesh = Q.mesh()
@@ -391,21 +370,22 @@ class LaxWendroff:
         ds = firedrake.ds if mesh.layers is None else firedrake.ds_v
         flux_cells = -div(h * u) * inner(u, grad(q)) * dx
         flux_out = div(h * u) * q * outflow * ds
-        flux_in = div(h_0 * u) * q * inflow * ds
+        flux_in = div(h_ * u) * q * inflow * ds
         d2h_dt2 = flux_cells + flux_out + flux_in
 
         sources = self._continuity.sources(**self._fields)
         flux = self._continuity.flux(**self._fields)
         dh_dt = sources - flux
-        F = (h - h_0) * q * dx - dt * (dh_dt + 0.5 * dt * d2h_dt2)
+        F = (h - h_) * q * dx - dt * (dh_dt + 0.5 * dt * d2h_dt2)
+        self.F = F
 
-        problem = firedrake.NonlinearVariationalProblem(F, h)
-        self._solver = firedrake.NonlinearVariationalSolver(
-            problem, solver_parameters=self._solver_parameters
-        )
+        # problem = firedrake.NonlinearVariationalProblem(F, h)
+        # self._solver = firedrake.NonlinearVariationalSolver(
+        #     problem, solver_parameters=self._solver_parameters
+        # )
 
-        self._thickness_old = h_0
-        self._timestep = dt
+        # self._thickness_old = h_0
+        # self._timestep = dt
 
     def solve(self, dt, **kwargs):
         r"""Compute the thickness evolution after time `dt`"""
